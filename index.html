@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111418">
+<title>VanRelay</title>
+<style>
+  :root {
+    --bg: #f3f4f6; --card: #ffffff; --text: #111418; --muted: #6b7280;
+    --line: #e5e7eb; --on: #16a34a; --on-soft: #dcfce7; --off: #9ca3af;
+    --accent: #2563eb; --danger: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0f12; --card: #171a1f; --text: #f3f4f6; --muted: #9ca3af;
+      --line: #2a2f37; --on: #22c55e; --on-soft: #12301d; --off: #4b5563;
+      --accent: #3b82f6; --danger: #ef4444;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 17px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 520px; margin: 0 auto;
+    padding: max(20px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+  h1 { font-size: 26px; margin: 0; letter-spacing: -0.02em; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off); }
+  .dot.ok { background: var(--on); }
+  .dot.busy { background: #f59e0b; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  button { font: inherit; border: 0; cursor: pointer; }
+  .connect { width: 100%; padding: 16px; border-radius: 14px; background: var(--accent);
+    color: #fff; font-weight: 600; font-size: 18px; margin-bottom: 18px; }
+  .connect.hidden { display: none; }
+
+  .relays { display: grid; gap: 14px; }
+  .relay { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    width: 100%; padding: 22px 20px; border-radius: 18px; background: var(--card);
+    border: 2px solid var(--line); color: var(--text); text-align: left;
+    transition: background .15s, border-color .15s; }
+  .relay.on { background: var(--on-soft); border-color: var(--on); }
+  .relay:disabled { opacity: .45; }
+  .relay .name { font-size: 20px; font-weight: 600; }
+  .relay .sub { font-size: 14px; color: var(--muted); margin-top: 2px; }
+  .switch { flex: none; width: 64px; height: 36px; border-radius: 18px; background: var(--off);
+    position: relative; transition: background .15s; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 30px; height: 30px;
+    border-radius: 50%; background: #fff; transition: left .15s; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+  .relay.on .switch { background: var(--on); }
+  .relay.on .switch::after { left: 31px; }
+
+  .alloff { width: 100%; margin-top: 14px; padding: 16px; border-radius: 14px;
+    background: var(--card); color: var(--danger); border: 2px solid var(--line);
+    font-weight: 600; }
+  .alloff:disabled { opacity: .45; }
+
+  .msg { margin-top: 18px; font-size: 14px; color: var(--muted); min-height: 1.4em; text-align: center; }
+  .msg.err { color: var(--danger); }
+  .foot { margin-top: 28px; font-size: 13px; color: var(--muted); text-align: center; }
+  .foot button { background: none; color: var(--muted); text-decoration: underline; padding: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>VanRelay</h1>
+    <div class="status"><span id="dot" class="dot"></span><span id="statusText">Not connected</span></div>
+  </header>
+
+  <button id="connectBtn" class="connect">Connect</button>
+
+  <div class="relays">
+    <button class="relay" id="r1" data-bit="1" disabled>
+      <div><div class="name" id="n1">Relay 1</div><div class="sub" id="s1">—</div></div>
+      <div class="switch" aria-hidden="true"></div>
+    </button>
+    <button class="relay" id="r2" data-bit="2" disabled>
+      <div><div class="name" id="n2">Relay 2</div><div class="sub" id="s2">—</div></div>
+      <div class="switch" aria-hidden="true"></div>
+    </button>
+  </div>
+
+  <button id="allOff" class="alloff" disabled>All off</button>
+
+  <div id="msg" class="msg"></div>
+
+  <div class="foot">
+    <button id="rename">Rename relays</button> · <button id="disconnect">Disconnect</button>
+  </div>
+</main>
+
+<script>
+  // Must match VanRelay.ino
+  const SERVICE_UUID = "7a1e0001-3c4b-4d2a-9f10-5b6e8c2d1a01";
+  const RELAYS_UUID  = "7a1e0002-3c4b-4d2a-9f10-5b6e8c2d1a01";
+
+  const $ = id => document.getElementById(id);
+  let device = null, relayChr = null, state = 0, busy = false, wantConnected = false;
+
+  // ---- relay names (stored on this phone only) ----
+  function loadNames() {
+    let names = ["Relay 1", "Relay 2"];
+    try { const s = JSON.parse(localStorage.getItem("vanrelay-names")); if (Array.isArray(s)) names = s; } catch (e) {}
+    $("n1").textContent = names[0] || "Relay 1";
+    $("n2").textContent = names[1] || "Relay 2";
+  }
+  $("rename").onclick = () => {
+    const a = prompt("Name for relay 1", $("n1").textContent); if (a === null) return;
+    const b = prompt("Name for relay 2", $("n2").textContent); if (b === null) return;
+    try { localStorage.setItem("vanrelay-names", JSON.stringify([a.trim(), b.trim()])); } catch (e) {}
+    loadNames();
+  };
+  loadNames();
+
+  // ---- UI ----
+  function setStatus(kind, text) {
+    $("dot").className = "dot" + (kind ? " " + kind : "");
+    $("statusText").textContent = text;
+  }
+  function msg(text, isErr) { $("msg").textContent = text || ""; $("msg").className = "msg" + (isErr ? " err" : ""); }
+  function render() {
+    const connected = !!relayChr;
+    for (const [id, bit, sub] of [["r1", 1, "s1"], ["r2", 2, "s2"]]) {
+      const on = (state & bit) !== 0;
+      $(id).classList.toggle("on", on);
+      $(id).disabled = !connected || busy;
+      $(sub).textContent = connected ? (on ? "ON" : "Off") : "—";
+    }
+    $("allOff").disabled = !connected || busy;
+    $("connectBtn").classList.toggle("hidden", connected);
+  }
+
+  // ---- BLE ----
+  async function connect() {
+    if (!navigator.bluetooth) {
+      msg("This browser has no Bluetooth. On iPhone, open this page in the Bluefy app.", true);
+      return;
+    }
+    try {
+      msg("");
+      if (!device) {
+        device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE_UUID] }] });
+        device.addEventListener("gattserverdisconnected", onDisconnected);
+      }
+      wantConnected = true;
+      await openGatt();
+    } catch (e) {
+      setStatus("", "Not connected");
+      if (e && e.name !== "NotFoundError") msg("Connect failed: " + (e.message || e), true);
+    }
+  }
+
+  async function openGatt() {
+    setStatus("busy", "Connecting…"); render();
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    relayChr = await service.getCharacteristic(RELAYS_UUID);
+    relayChr.addEventListener("characteristicvaluechanged", ev => {
+      state = ev.target.value.getUint8(0); render();
+    });
+    await relayChr.startNotifications();
+    state = (await relayChr.readValue()).getUint8(0);
+    setStatus("ok", "Connected");
+    render();
+  }
+
+  function onDisconnected() {
+    relayChr = null; render();
+    if (!wantConnected) { setStatus("", "Not connected"); return; }
+    setStatus("busy", "Reconnecting…");
+    retry(1);
+  }
+
+  async function retry(n) {
+    if (!wantConnected || !device) return;
+    try { await openGatt(); msg(""); }
+    catch (e) {
+      if (n >= 10) { setStatus("", "Not connected"); msg("Lost connection. Tap Connect.", true); wantConnected = false; render(); return; }
+      setTimeout(() => retry(n + 1), Math.min(1000 * n, 5000));
+    }
+  }
+
+  async function writeState(newState) {
+    if (!relayChr || busy) return;
+    busy = true; render();
+    try {
+      await relayChr.writeValue(new Uint8Array([newState & 0x03]));
+      state = newState & 0x03;
+      msg("");
+    } catch (e) {
+      msg("Command failed: " + (e.message || e), true);
+    } finally {
+      busy = false; render();
+    }
+  }
+
+  $("connectBtn").onclick = connect;
+  $("r1").onclick = () => writeState(state ^ 0x01);
+  $("r2").onclick = () => writeState(state ^ 0x02);
+  $("allOff").onclick = () => writeState(0);
+  $("disconnect").onclick = () => {
+    wantConnected = false;
+    if (device && device.gatt.connected) device.gatt.disconnect();
+    relayChr = null; setStatus("", "Not connected"); render();
+  };
+
+  render();
+</script>
+</body>
+</html>
