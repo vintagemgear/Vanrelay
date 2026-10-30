@@ -149,7 +149,17 @@
       await openGatt();
     } catch (e) {
       setStatus("", "Not connected");
-      if (e && e.name !== "NotFoundError") msg("Connect failed: " + (e.message || e), true);
+      wantConnected = false;
+      // Forget the cached device so the next tap shows the device picker again
+      if (device) {
+        try { device.removeEventListener("gattserverdisconnected", onDisconnected); } catch (_) {}
+        try { if (device.gatt.connected) device.gatt.disconnect(); } catch (_) {}
+        device = null;
+      }
+      relayChr = null; render();
+      if (e && e.name === "NotFoundError") return;   // user closed the picker
+      msg("Could not reach VanRelay. Is it powered and not connected to another app? Tap Connect to try again.", true);
+      console.log("Connect error:", e && e.name, e && e.message, e);
     }
   }
 
