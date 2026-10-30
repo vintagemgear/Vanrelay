@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#111418">
-<title>VanRelay</title>
+<title>Ducato Dries</title>
 <style>
   :root {
     --bg: #f3f4f6; --card: #ffffff; --text: #111418; --muted: #6b7280;
@@ -25,6 +25,7 @@
     padding: max(20px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
   header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
   h1 { font-size: 26px; margin: 0; letter-spacing: -0.02em; }
+  .fw { font-size: 13px; color: var(--muted); margin-top: 2px; }
   .status { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--muted); }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off); }
   .dot.ok { background: var(--on); }
@@ -72,7 +73,10 @@
 <body>
 <main>
   <header>
-    <h1>VanRelay</h1>
+    <div>
+      <h1>Ducato Dries</h1>
+      <div class="fw" id="fw">Firmware —</div>
+    </div>
     <div class="status"><span id="dot" class="dot"></span><span id="statusText">Not connected</span></div>
   </header>
 
@@ -231,16 +235,22 @@
   }
 
   function showStatus(dv) {
-    const s = new TextDecoder().decode(dv);          // "ota:off" or "ota:on;ssid=..;ip=..;left=.."
+    // "ota:off;fw=v0.1;build=Oct 30 2026 13:25:01"  or  "ota:on;ssid=..;ip=..;left=..;fw=..;build=.."
+    const s = new TextDecoder().decode(dv);
     const on = s.startsWith("ota:on");
+    const kv = Object.fromEntries(s.split(";").slice(1).map(p => { const i = p.indexOf("="); return i < 0 ? [p, ""] : [p.slice(0, i), p.slice(i + 1)]; }));
+    if (kv.fw) $("fw").textContent = "Firmware " + kv.fw + (kv.build ? " · built " + formatBuild(kv.build) : "");
     $("ota").classList.toggle("show", on);
     if (!on) return;
-    const kv = Object.fromEntries(s.split(";").slice(1).map(p => p.split("=")));
     $("otaSsid").textContent = kv.ssid || "VanRelay-Update";
     $("otaIp").textContent = "http://" + (kv.ip || "192.168.4.1");
     const left = parseInt(kv.left || "0", 10);
     $("otaLeft").textContent = ("busy" in kv) ? "uploading…" :
       Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0") + " left";
+  }
+  function formatBuild(b) {          // "Oct 30 2026 13:25:01" -> "30 Oct 2026 13:25"
+    const m = b.trim().split(/\s+/);
+    return m.length >= 4 ? `${m[1]} ${m[0]} ${m[2]} ${m[3].slice(0, 5)}` : b;
   }
   async function sendCommand(text) {
     if (!cmdChr) { msg("Not connected, or firmware has no command support.", true); return; }
