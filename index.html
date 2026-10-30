@@ -61,6 +61,12 @@
   .msg.err { color: var(--danger); }
   .foot { margin-top: 28px; font-size: 13px; color: var(--muted); text-align: center; }
   .foot button { background: none; color: var(--muted); text-decoration: underline; padding: 4px; }
+  .ota { display: none; margin-top: 16px; padding: 16px; border-radius: 14px; background: var(--card);
+    border: 2px solid #f59e0b; font-size: 15px; }
+  .ota.show { display: block; }
+  .ota b { font-size: 16px; }
+  .ota code { font-size: 14px; }
+  .ota button { margin-top: 10px; padding: 10px 14px; border-radius: 10px; background: var(--line); color: var(--text); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -85,10 +91,17 @@
 
   <button id="allOff" class="alloff" disabled>All off</button>
 
+  <div id="ota" class="ota">
+    <b>Update mode on</b> &middot; <span id="otaLeft"></span><br>
+    On your Mac, join WiFi <code id="otaSsid">VanRelay-Update</code>, then upload from the
+    Arduino IDE (network port <i>VanRelay</i>) or open <code id="otaIp">http://192.168.4.1</code>.
+    <br><button id="otaStop">Stop update mode</button>
+  </div>
+
   <div id="msg" class="msg"></div>
 
   <div class="foot">
-    <button id="rename">Rename relays</button> · <button id="disconnect">Disconnect</button>
+    <button id="rename">Rename relays</button> · <button id="disconnect">Disconnect</button> · <button id="otaBtn">Firmware update</button>
   </div>
 </main>
 
@@ -96,8 +109,11 @@
   // Must match VanRelay.ino
   const SERVICE_UUID = "7a1e0001-3c4b-4d2a-9f10-5b6e8c2d1a01";
   const RELAYS_UUID  = "7a1e0002-3c4b-4d2a-9f10-5b6e8c2d1a01";
+  const COMMAND_UUID = "7a1e0004-3c4b-4d2a-9f10-5b6e8c2d1a01";
+  const STATUS_UUID  = "7a1e0005-3c4b-4d2a-9f10-5b6e8c2d1a01";
 
   const $ = id => document.getElementById(id);
+  let cmdChr = null, statusChr = null;
   let device = null, relayChr = null, state = 0, busy = false, wantConnected = false;
 
   // ---- relay names (stored on this phone only) ----
@@ -173,6 +189,13 @@
     });
     await relayChr.startNotifications();
     state = (await relayChr.readValue()).getUint8(0);
+    try { cmdChr = await service.getCharacteristic(COMMAND_UUID); } catch (e) { cmdChr = null; }
+    try {
+      statusChr = await service.getCharacteristic(STATUS_UUID);
+      statusChr.addEventListener("characteristicvaluechanged", ev => showStatus(ev.target.value));
+      await statusChr.startNotifications();
+      showStatus(await statusChr.readValue());
+    } catch (e) { statusChr = null; }
     setStatus("ok", "Connected");
     render();
   }
@@ -206,6 +229,30 @@
       busy = false; render();
     }
   }
+
+  function showStatus(dv) {
+    const s = new TextDecoder().decode(dv);          // "ota:off" or "ota:on;ssid=..;ip=..;left=.."
+    const on = s.startsWith("ota:on");
+    $("ota").classList.toggle("show", on);
+    if (!on) return;
+    const kv = Object.fromEntries(s.split(";").slice(1).map(p => p.split("=")));
+    $("otaSsid").textContent = kv.ssid || "VanRelay-Update";
+    $("otaIp").textContent = "http://" + (kv.ip || "192.168.4.1");
+    const left = parseInt(kv.left || "0", 10);
+    $("otaLeft").textContent = ("busy" in kv) ? "uploading…" :
+      Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0") + " left";
+  }
+  async function sendCommand(text) {
+    if (!cmdChr) { msg("Not connected, or firmware has no command support.", true); return; }
+    try { await cmdChr.writeValue(new TextEncoder().encode(text)); }
+    catch (e) { msg("Command failed: " + (e.message || e), true); }
+  }
+  $("otaBtn").onclick = () => {
+    if (!relayChr) { msg("Connect first.", true); return; }
+    if (!statusChr) { msg("This firmware has no update mode yet. Flash the OTA version over USB once.", true); return; }
+    if (confirm("Turn on WiFi update mode for 5 minutes?")) sendCommand("ota");
+  };
+  $("otaStop").onclick = () => sendCommand("otaoff");
 
   $("connectBtn").onclick = connect;
   $("r1").onclick = () => writeState(state ^ 0x01);
